@@ -83,11 +83,21 @@ export default function useAccountData() {
           }
 
           if (msg.type === 'positions' && msg.data) {
-            const posArr = Array.isArray(msg.data) ? msg.data : []
-            if (posArr.length > 0 && posArr[0] && posArr[0].login != null) {
+            let posArr, posLogin
+            if (Array.isArray(msg.data)) {
+              posArr = msg.data
+              posLogin = posArr.length > 0 && posArr[0] ? posArr[0].login : null
+            } else if (msg.data.positions) {
+              posArr = Array.isArray(msg.data.positions) ? msg.data.positions : []
+              posLogin = msg.data.login ?? (posArr.length > 0 && posArr[0] ? posArr[0].login : null)
+            } else {
+              posArr = []
+              posLogin = null
+            }
+            if (posLogin != null) {
               setPositions(prev => ({
                 ...prev,
-                [posArr[0].login]: posArr
+                [posLogin]: posArr
               }))
             }
           }

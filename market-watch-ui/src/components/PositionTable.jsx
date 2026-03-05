@@ -218,8 +218,10 @@ export default function PositionTable({ positions, login, onClose, onModify, loa
 
   const handleModifyClick = (pos) => {
     setModifyTicket(pos.ticket)
-    setModifySL(pos.sl != null ? String(pos.sl) : '0')
-    setModifyTP(pos.tp != null ? String(pos.tp) : '0')
+    const sl = pos.priceSl ?? pos.sl
+    const tp = pos.priceTp ?? pos.tp
+    setModifySL(sl != null ? String(sl) : '0')
+    setModifyTP(tp != null ? String(tp) : '0')
   }
 
   const handleModifySubmit = (pos) => {
@@ -288,12 +290,12 @@ export default function PositionTable({ positions, login, onClose, onModify, loa
                 <td style={styles.tdRight}>
                   {typeof currentPrice === 'number' ? formatPrice(currentPrice) : currentPrice}
                 </td>
-                <td style={styles.tdRight}>{pos.sl ? formatPrice(pos.sl) : '-'}</td>
-                <td style={styles.tdRight}>{pos.tp ? formatPrice(pos.tp) : '-'}</td>
+                <td style={styles.tdRight}>{(pos.priceSl ?? pos.sl) ? formatPrice(pos.priceSl ?? pos.sl) : '-'}</td>
+                <td style={styles.tdRight}>{(pos.priceTp ?? pos.tp) ? formatPrice(pos.priceTp ?? pos.tp) : '-'}</td>
                 <td style={{ ...styles.tdRight, color: profitColor, fontWeight: 600 }}>
                   {formatProfit(profit)}
                 </td>
-                <td style={styles.tdRight}>{pos.swap != null ? formatProfit(pos.swap) : '$0.00'}</td>
+                <td style={styles.tdRight}>{(pos.storage ?? pos.swap) != null ? formatProfit(pos.storage ?? pos.swap) : '$0.00'}</td>
                 <td style={styles.actionsCell}>
                   {isLoading ? (
                     <div style={styles.spinner} />

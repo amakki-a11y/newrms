@@ -3,8 +3,6 @@ import Header from './components/Header'
 import MarketTable from './components/MarketTable'
 import AccountTable from './components/AccountTable'
 import AccountSummary from './components/AccountSummary'
-import PositionTable from './components/PositionTable'
-import OpenPositionDialog from './components/OpenPositionDialog'
 import DashboardTab from './components/DashboardTab'
 import ChartTab from './components/ChartTab'
 import ChatSidebar from './components/ChatSidebar'
@@ -116,8 +114,6 @@ const styles = {
 function App() {
   const [activeTab, setActiveTab] = useState('market')
   const [chatOpen, setChatOpen] = useState(false)
-  const [selectedAccount, setSelectedAccount] = useState(null)
-  const [openPositionDialogOpen, setOpenPositionDialogOpen] = useState(false)
 
   const marketData = useMarketData()
   const accountData = useAccountData()
@@ -128,13 +124,6 @@ function App() {
   const toggleChat = useCallback(() => {
     setChatOpen(prev => !prev)
   }, [])
-
-  const handleSelectAccount = useCallback((account) => {
-    setSelectedAccount(account)
-    if (account && accountData.getPositions) {
-      accountData.getPositions(account)
-    }
-  }, [accountData])
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -153,24 +142,18 @@ function App() {
             <AccountTable
               accounts={accountData.accounts}
               positions={accountData.positions}
-              onSelectAccount={handleSelectAccount}
+              summary={accountData.summary}
+              page={accountData.page}
+              totalPages={accountData.totalPages}
+              search={accountData.search}
+              onSetPage={accountData.setPage}
+              onSetSearch={accountData.setSearch}
               onGetPositions={accountData.getPositions}
               onClosePosition={accountData.closePosition}
-              onOpenPosition={() => setOpenPositionDialogOpen(true)}
+              onOpenPosition={accountData.openPosition}
               onModifyPosition={accountData.modifyPosition}
-            />
-            {selectedAccount && accountData.positions[selectedAccount] && (
-              <PositionTable
-                positions={accountData.positions[selectedAccount]}
-                onClose={accountData.closePosition}
-                onModify={accountData.modifyPosition}
-              />
-            )}
-            <OpenPositionDialog
-              isOpen={openPositionDialogOpen}
-              onClose={() => setOpenPositionDialogOpen(false)}
-              onSubmit={accountData.openPosition}
-              symbols={marketData.symbols}
+              loadingTickets={accountData.loadingTickets}
+              ticks={marketData.ticks}
             />
           </div>
         )
@@ -233,7 +216,15 @@ function App() {
           <ChatSidebar
             messages={chatData.messages}
             onSend={chatData.sendMessage}
+            onConfirmAction={(messageId, actionIndex, isConfirm) => {
+              if (isConfirm) {
+                chatData.confirmAction(messageId, actionIndex)
+              } else {
+                chatData.cancelAction(messageId, actionIndex)
+              }
+            }}
             connected={chatData.connected}
+            streaming={chatData.streaming}
             isOpen={chatOpen}
             onToggle={toggleChat}
           />
