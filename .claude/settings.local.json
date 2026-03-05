@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\\\Users\\\\ABBASS\\\\Desktop\\\\NEW RMS\")",
+      "Bash(dotnet --version)",
+      "Bash(node --version)",
+      "Bash(git --version)",
+      "Bash(python3 -c \":*)",
+      "Bash(node -e \":*)",
+      "Bash(dotnet add package Dapper --version 2.1.35)",
+      "Bash(dotnet add package Fleck --version 1.2.0)",
+      "Bash(dotnet add package Newtonsoft.Json --version 13.0.3)",
+      "Bash(dotnet add package Npgsql --version 8.0.6)",
+      "Bash(dotnet build)",
+      "Bash(npm create vite@latest market-watch-ui -- --template react)",
+      "Bash(npm install)",
+      "Bash(npm install lightweight-charts@5.1.0)",
+      "Bash(npx vite build)",
+      "Bash(git init)",
+      "Bash(git add -A)",
+      "Bash(git commit:*)",
+      "Bash(git config user.name \"ABBASS\")",
+      "Bash(git config user.email \"abbass@rms.local\")"
+    ]
+  }
+}
