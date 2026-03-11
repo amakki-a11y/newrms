@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Channels;
 
 namespace MT5Connector
@@ -10,7 +12,7 @@ namespace MT5Connector
 
         private readonly MT5Config _config;
         private readonly Dictionary<string, TickData> _latestTicks = new();
-        private readonly Dictionary<string, SymbolInfo> _symbols = new();
+        private readonly ConcurrentDictionary<string, SymbolInfo> _symbols = new();
         private bool _connected = false;
 
         // Mock mode
@@ -146,39 +148,14 @@ namespace MT5Connector
                 });
             }
 
-            // Real MT5 implementation
-            try
+            // Real MT5 trade operations not yet implemented
+            Console.WriteLine($"[MT5] ClosePosition: login={login}, ticket={ticket}, symbol={symbol} — NOT IMPLEMENTED");
+            return Task.FromResult(new ClosePositionResult
             {
-                Console.WriteLine($"[MT5] ClosePosition: login={login}, ticket={ticket}, symbol={symbol}, action={action}, volume={volume}");
-
-                // In real mode, would use MT5 Manager API:
-                // var request = manager.TradeRequest();
-                // request.Action = IMTRequest.EnTradeActions.TA_DEALER_POS_CLOSE;
-                // request.Login = (ulong)login;
-                // request.Symbol = symbol;
-                // request.Position = (ulong)ticket;
-                // request.Type = action == 0 ? IMTOrder.EnOrderType.OP_SELL : IMTOrder.EnOrderType.OP_BUY; // reverse to close
-                // request.Volume = (ulong)volume;
-                // var result = manager.TradeResult();
-                // var retcode = manager.TradeRequest(request, result);
-
-                return Task.FromResult(new ClosePositionResult
-                {
-                    Success = true,
-                    Message = "Position closed via MT5 Manager API",
-                    Ticket = ticket
-                });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[MT5] ClosePosition error: {ex.Message}");
-                return Task.FromResult(new ClosePositionResult
-                {
-                    Success = false,
-                    Message = $"Close position failed: {ex.Message}",
-                    Ticket = ticket
-                });
-            }
+                Success = false,
+                Message = "Real mode trading not yet implemented",
+                Ticket = ticket
+            });
         }
 
         public Task<OpenPositionResult> OpenPosition(long login, string symbol, int action, long volume)
@@ -195,40 +172,14 @@ namespace MT5Connector
                 });
             }
 
-            // Real MT5 implementation
-            try
+            // Real MT5 trade operations not yet implemented
+            Console.WriteLine($"[MT5] OpenPosition: login={login}, symbol={symbol} — NOT IMPLEMENTED");
+            return Task.FromResult(new OpenPositionResult
             {
-                Console.WriteLine($"[MT5] OpenPosition: login={login}, symbol={symbol}, action={action}, volume={volume}");
-
-                // In real mode, would use MT5 Manager API:
-                // var request = manager.TradeRequest();
-                // request.Action = IMTRequest.EnTradeActions.TA_DEALER_POS_OPEN;
-                // request.Login = (ulong)login;
-                // request.Symbol = symbol;
-                // request.Type = action == 0 ? IMTOrder.EnOrderType.OP_BUY : IMTOrder.EnOrderType.OP_SELL;
-                // request.Volume = (ulong)volume;
-                // request.PriceOrder = GetTick(symbol)?.Ask ?? 0; // for buy
-                // var result = manager.TradeResult();
-                // var retcode = manager.TradeRequest(request, result);
-
-                long ticket = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                return Task.FromResult(new OpenPositionResult
-                {
-                    Success = true,
-                    Message = "Position opened via MT5 Manager API",
-                    Ticket = ticket
-                });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[MT5] OpenPosition error: {ex.Message}");
-                return Task.FromResult(new OpenPositionResult
-                {
-                    Success = false,
-                    Message = $"Open position failed: {ex.Message}",
-                    Ticket = 0
-                });
-            }
+                Success = false,
+                Message = "Real mode trading not yet implemented",
+                Ticket = 0
+            });
         }
 
         public Task<ModifyPositionResult> ModifyPosition(long login, long ticket, string symbol, double sl, double tp)
@@ -244,39 +195,14 @@ namespace MT5Connector
                 });
             }
 
-            // Real MT5 implementation
-            try
+            // Real MT5 trade operations not yet implemented
+            Console.WriteLine($"[MT5] ModifyPosition: login={login}, ticket={ticket}, symbol={symbol} — NOT IMPLEMENTED");
+            return Task.FromResult(new ModifyPositionResult
             {
-                Console.WriteLine($"[MT5] ModifyPosition: login={login}, ticket={ticket}, symbol={symbol}, SL={sl}, TP={tp}");
-
-                // In real mode, would use MT5 Manager API:
-                // var request = manager.TradeRequest();
-                // request.Action = IMTRequest.EnTradeActions.TA_DEALER_POS_MODIFY;
-                // request.Login = (ulong)login;
-                // request.Position = (ulong)ticket;
-                // request.Symbol = symbol;
-                // request.PriceSL = sl;
-                // request.PriceTP = tp;
-                // var result = manager.TradeResult();
-                // var retcode = manager.TradeRequest(request, result);
-
-                return Task.FromResult(new ModifyPositionResult
-                {
-                    Success = true,
-                    Message = "Position modified via MT5 Manager API",
-                    Ticket = ticket
-                });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[MT5] ModifyPosition error: {ex.Message}");
-                return Task.FromResult(new ModifyPositionResult
-                {
-                    Success = false,
-                    Message = $"Modify position failed: {ex.Message}",
-                    Ticket = ticket
-                });
-            }
+                Success = false,
+                Message = "Real mode trading not yet implemented",
+                Ticket = ticket
+            });
         }
 
         // Raise tick event (called by tick sink or mock generator)
@@ -353,53 +279,23 @@ namespace MT5Connector
 
                 Console.WriteLine("[MT5] MT5 Manager API loaded, connecting...");
 
-                // Attempt initialization - pass the path to the native DLLs
+                // Initialize the MT5 Manager API with DLL path
                 var initMethod = factoryType.GetMethod("Initialize");
                 if (initMethod != null)
                 {
                     var initParams = initMethod.GetParameters();
-                    Console.WriteLine($"[MT5] Initialize params: {string.Join(", ", initParams.Select(p => $"{p.ParameterType.Name} {p.Name}"))}");
-
-                    // Try with baseDir path (where native DLLs live)
                     try
                     {
                         if (initParams.Length == 1 && initParams[0].ParameterType == typeof(string))
-                        {
-                            var initResult = initMethod.Invoke(null, new object?[] { baseDir });
-                            Console.WriteLine($"[MT5] Initialize(path) result: {initResult}");
-                        }
+                            initMethod.Invoke(null, new object?[] { baseDir });
                         else
-                        {
-                            var initResult = initMethod.Invoke(null, new object?[] { null });
-                            Console.WriteLine($"[MT5] Initialize(null) result: {initResult}");
-                        }
+                            initMethod.Invoke(null, new object?[] { null });
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[MT5] Initialize error: {ex.InnerException?.Message ?? ex.Message}");
                     }
                 }
-
-                // Find the right CreateManager overload: CreateManager(uint version, out CIMTManagerAPI manager)
-                var createMethod = factoryType.GetMethods()
-                    .Where(m => m.Name == "CreateManager")
-                    .FirstOrDefault(m =>
-                    {
-                        var p = m.GetParameters();
-                        return p.Length == 2 && p[0].ParameterType == typeof(uint);
-                    });
-                if (createMethod == null)
-                {
-                    // Try the 3-parameter overload: CreateManager(uint, string, out MTRetCode)
-                    createMethod = factoryType.GetMethods()
-                        .FirstOrDefault(m => m.Name == "CreateManager");
-                }
-                if (createMethod == null)
-                {
-                    Console.WriteLine("[MT5] CreateManager method not found");
-                    return false;
-                }
-                Console.WriteLine($"[MT5] Using CreateManager with {createMethod.GetParameters().Length} params: {string.Join(", ", createMethod.GetParameters().Select(p => p.ParameterType.Name))}");
 
                 // Get version constant (use default 3430 if not found)
                 uint apiVersion = 3430;
@@ -409,7 +305,8 @@ namespace MT5Connector
                     apiVersion = (uint)(versionField.GetValue(null) ?? 3430);
                 }
 
-                // Try both overloads - prefer 3-param with data_path, fallback to 2-param
+                // Find CreateManager overloads - prefer 3-param with data_path, fallback to 2-param
+                MethodInfo? createMethod;
                 var allCreateMethods = factoryType.GetMethods()
                     .Where(m => m.Name == "CreateManager")
                     .OrderByDescending(m => m.GetParameters().Length) // try 3-param first
@@ -425,7 +322,6 @@ namespace MT5Connector
                 {
                     createMethod = create3;
                     createParams = new object?[] { apiVersion, baseDir, null };
-                    Console.WriteLine($"[MT5] Trying 3-param CreateManager with data_path={baseDir}");
                 }
                 else if (create2 != null)
                 {
@@ -439,9 +335,6 @@ namespace MT5Connector
                 }
 
                 var createResult = createMethod.Invoke(null, createParams);
-                Console.WriteLine($"[MT5] CreateManager return value: {createResult} (type: {createResult?.GetType().Name ?? "null"})");
-                for (int i = 0; i < createParams.Length; i++)
-                    Console.WriteLine($"[MT5]   param[{i}] = {createParams[i]} (type: {createParams[i]?.GetType().Name ?? "null"})");
 
                 // The manager could be the return value or an out param
                 object? manager = null;
@@ -467,26 +360,13 @@ namespace MT5Connector
 
                 if (manager == null)
                 {
-                    Console.WriteLine("[MT5] Failed to create MT5 Manager instance - no manager object found");
-                    Console.WriteLine($"[MT5] Listing all CreateManager overloads:");
-                    foreach (var m in factoryType.GetMethods().Where(x => x.Name == "CreateManager"))
-                    {
-                        var pars = string.Join(", ", m.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
-                        Console.WriteLine($"[MT5]   {m.ReturnType.Name} CreateManager({pars})");
-                    }
+                    Console.WriteLine("[MT5] Failed to create MT5 Manager instance");
                     return false;
                 }
-                Console.WriteLine($"[MT5] Manager object type: {manager.GetType().FullName}");
 
-                // Connect - discover the right overload
+                // Connect via reflection
                 var managerType = manager.GetType();
                 var connectMethods = managerType.GetMethods().Where(m => m.Name == "Connect").ToList();
-                Console.WriteLine($"[MT5] Found {connectMethods.Count} Connect overloads:");
-                foreach (var cm in connectMethods)
-                {
-                    var pars = string.Join(", ", cm.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
-                    Console.WriteLine($"[MT5]   {cm.ReturnType.Name} Connect({pars})");
-                }
 
                 string serverAddr = $"{_config.ServerAddress}:{_config.ServerPort}";
                 object? connectResult = null;
@@ -532,9 +412,7 @@ namespace MT5Connector
                                 connectArgs.Add(pType.IsValueType ? Activator.CreateInstance(pType)! : null!);
                         }
 
-                        Console.WriteLine($"[MT5] Trying Connect with {pars.Length} params: {string.Join(", ", connectArgs.Select((a, i) => $"{pars[i].Name}={a}"))}");
                         connectResult = cm.Invoke(manager, connectArgs.ToArray());
-                        Console.WriteLine($"[MT5] Connect result: {connectResult}");
                         break;
                     }
                     catch (Exception ex)
@@ -543,9 +421,18 @@ namespace MT5Connector
                     }
                 }
 
-                if (connectResult == null || connectResult.ToString()!.Contains("ERROR") || connectResult.ToString()!.Contains("FAIL"))
+                // Check if connect succeeded — MT_RET_OK is typically enum value 0
+                if (connectResult == null)
                 {
-                    Console.WriteLine($"[MT5] Connection to {serverAddr} failed: {connectResult}");
+                    Console.WriteLine($"[MT5] Connection to {serverAddr} failed: no result");
+                    return false;
+                }
+                var connectResultStr = connectResult.ToString() ?? "";
+                bool connectOk = connectResultStr == "MT_RET_OK"
+                    || (connectResult.GetType().IsEnum && Convert.ToInt32(connectResult) == 0);
+                if (!connectOk)
+                {
+                    Console.WriteLine($"[MT5] Connection to {serverAddr} failed: {connectResultStr}");
                     return false;
                 }
 
@@ -599,17 +486,12 @@ namespace MT5Connector
                         {
                             symbolTemplate = symbolCreateMethod.Invoke(manager, null);
                         }
-                        Console.WriteLine($"[MT5] SymbolCreate: {symbolTemplate?.GetType().Name ?? "null"}");
                     }
 
                     var nextMethod = managerType.GetMethod("SymbolNext");
                     if (nextMethod != null)
                     {
                         var nextParams = nextMethod.GetParameters();
-                        Console.WriteLine($"[MT5] SymbolNext params: {string.Join(", ", nextParams.Select(p => $"{p.ParameterType.Name} {p.Name}"))}");
-
-                        // Log first symbol object's methods for debugging
-                        bool loggedMethods = false;
 
                         for (uint i = 0; i < total; i++)
                         {
@@ -637,36 +519,10 @@ namespace MT5Connector
 
                                 var symType = symbolObj.GetType();
 
-                                if (!loggedMethods)
-                                {
-                                    // Log available methods/properties for debugging
-                                    var methods = symType.GetMethods()
-                                        .Where(m => m.GetParameters().Length == 0 && m.ReturnType != typeof(void))
-                                        .Select(m => $"{m.ReturnType.Name} {m.Name}()")
-                                        .Take(30);
-                                    Console.WriteLine($"[MT5] Symbol object methods: {string.Join(", ", methods)}");
-
-                                    var props = symType.GetProperties()
-                                        .Select(p => $"{p.PropertyType.Name} {p.Name}")
-                                        .Take(20);
-                                    Console.WriteLine($"[MT5] Symbol object properties: {string.Join(", ", props)}");
-                                    loggedMethods = true;
-                                }
-
-                                // Try multiple ways to get the symbol name
-                                // Use GetMethods to find the parameterless getter to avoid ambiguity
-                                string name = "";
-                                var symbolGetter = symType.GetMethods().FirstOrDefault(m => m.Name == "Symbol" && m.GetParameters().Length == 0 && m.ReturnType == typeof(string));
-                                if (symbolGetter != null)
-                                    name = symbolGetter.Invoke(symbolObj, null)?.ToString() ?? "";
+                                // Get symbol name via cached reflection helper
+                                string name = GetReflectionValue(symType, symbolObj, "Symbol")?.ToString() ?? "";
                                 if (string.IsNullOrEmpty(name))
-                                {
-                                    var nameGetter = symType.GetMethods().FirstOrDefault(m => m.Name == "Name" && m.GetParameters().Length == 0 && m.ReturnType == typeof(string));
-                                    name = nameGetter?.Invoke(symbolObj, null)?.ToString() ?? "";
-                                }
-
-                                if (i < 3)
-                                    Console.WriteLine($"[MT5] Symbol[{i}]: name='{name}', retCode={retCode}");
+                                    name = GetReflectionValue(symType, symbolObj, "Name")?.ToString() ?? "";
 
                                 if (!string.IsNullOrEmpty(name))
                                 {
@@ -691,9 +547,9 @@ namespace MT5Connector
                                     };
                                 }
                             }
-                            catch (Exception ex)
+                            catch
                             {
-                                if (i < 3) Console.WriteLine($"[MT5] Symbol[{i}] error: {ex.InnerException?.Message ?? ex.Message}");
+                                // Skip symbols that fail to load
                             }
                         }
                     }
@@ -707,21 +563,59 @@ namespace MT5Connector
             }
         }
 
+        // Reflection cache: avoids repeated GetMethods() scanning on hot paths
+        private static readonly ConcurrentDictionary<(Type, string), MethodInfo?> _reflectionCache = new();
+
         // Helper: safely get a parameterless method/property value via reflection (avoids ambiguity)
         private static object? GetReflectionValue(Type type, object obj, string name)
         {
             try
             {
-                // Try parameterless method first
-                var method = type.GetMethods().FirstOrDefault(m => m.Name == name && m.GetParameters().Length == 0);
+                var key = (type, name);
+                if (!_reflectionCache.TryGetValue(key, out var method))
+                {
+                    method = type.GetMethods().FirstOrDefault(m => m.Name == name && m.GetParameters().Length == 0);
+                    _reflectionCache[key] = method;
+                }
                 if (method != null) return method.Invoke(obj, null);
 
-                // Try property
+                // Fallback: try property
                 var prop = type.GetProperty(name);
                 if (prop != null) return prop.GetValue(obj);
             }
             catch { }
             return null;
+        }
+
+        // Shared tick construction: builds TickData with spread and direction
+        private TickData BuildTickData(string symbol, double bid, double ask, double volume = 0)
+        {
+            var info = GetSymbolInfo(symbol);
+            int digits = info?.Digits ?? 5;
+
+            var tickData = new TickData
+            {
+                Symbol = symbol,
+                Bid = bid,
+                Ask = ask,
+                Volume = volume,
+                Digits = digits,
+                TickTime = DateTime.UtcNow
+            };
+
+            if (bid > 0 && ask > 0)
+            {
+                double pipMultiplier = Math.Pow(10, digits);
+                tickData.Spread = Math.Round((ask - bid) * pipMultiplier, 1);
+            }
+
+            // Compute direction from previous tick
+            TickData? prev;
+            lock (_tickLock) { _latestTicks.TryGetValue(symbol, out prev); }
+            if (prev != null)
+                tickData.Direction = bid > prev.Bid ? "up" : bid < prev.Bid ? "down" : "none";
+
+            return tickData;
         }
 
         private void StartRealTickPump()
@@ -787,32 +681,7 @@ namespace MT5Connector
 
                                         if (bid <= 0 && ask <= 0 && last <= 0) continue;
 
-                                        var info = GetSymbolInfo(symbol);
-                                        int digits = info?.Digits ?? 5;
-
-                                        var tickData = new TickData
-                                        {
-                                            Symbol = symbol,
-                                            Bid = bid,
-                                            Ask = ask,
-                                            Volume = (double)volume,
-                                            Digits = digits,
-                                            TickTime = DateTime.UtcNow
-                                        };
-
-                                        // Compute spread
-                                        if (bid > 0 && ask > 0)
-                                        {
-                                            double pipMultiplier = Math.Pow(10, digits);
-                                            tickData.Spread = Math.Round((ask - bid) * pipMultiplier, 1);
-                                        }
-
-                                        // Compute direction
-                                        TickData? prev;
-                                        lock (_tickLock) { _latestTicks.TryGetValue(symbol, out prev); }
-                                        if (prev != null)
-                                            tickData.Direction = bid > prev.Bid ? "up" : bid < prev.Bid ? "down" : "none";
-
+                                        var tickData = BuildTickData(symbol, bid, ask, (double)volume);
                                         RaiseTickReceived(tickData);
                                         ticksProcessed++;
                                     }
@@ -859,28 +728,7 @@ namespace MT5Connector
                                     if (existing != null && Math.Abs(existing.Bid - bid) < 1e-10 && Math.Abs(existing.Ask - ask) < 1e-10)
                                         continue;
 
-                                    var info = GetSymbolInfo(symbol);
-                                    int digits = info?.Digits ?? 5;
-
-                                    var tickData = new TickData
-                                    {
-                                        Symbol = symbol,
-                                        Bid = bid,
-                                        Ask = ask,
-                                        Digits = digits,
-                                        TickTime = DateTime.UtcNow
-                                    };
-
-                                    if (bid > 0 && ask > 0)
-                                    {
-                                        double pipMultiplier = Math.Pow(10, digits);
-                                        tickData.Spread = Math.Round((ask - bid) * pipMultiplier, 1);
-                                    }
-
-                                    // Compute direction
-                                    if (existing != null)
-                                        tickData.Direction = bid > existing.Bid ? "up" : bid < existing.Bid ? "down" : "none";
-
+                                    var tickData = BuildTickData(symbol, bid, ask);
                                     RaiseTickReceived(tickData);
                                     perSymbolTicks++;
                                 }
