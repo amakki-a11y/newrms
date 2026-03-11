@@ -187,11 +187,12 @@ function DirectionDot({ direction }) {
   )
 }
 
-function SymbolRow({ symbol, tick, index }) {
+function SymbolRow({ symbol, tick, index, symbolInfo }) {
   const [hovered, setHovered] = useState(false)
 
-  const digits = tick.digits != null ? tick.digits : 2
-  const direction = tick.direction || 'none'
+  const info = symbolInfo?.[symbol]
+  const digits = tick?.digits != null ? tick.digits : (info?.digits != null ? info.digits : 2)
+  const direction = tick?.direction || 'none'
   const isEvenRow = index % 2 === 0
 
   const rowBg = hovered
@@ -217,33 +218,33 @@ function SymbolRow({ symbol, tick, index }) {
         {symbol}
       </td>
       <td style={styles.dataCell}>
-        <PriceCell value={tick.bid} previousValue={tick.prevBid} digits={digits} />
+        {tick ? <PriceCell value={tick.bid} previousValue={tick.prevBid} digits={digits} /> : <span style={{ color: '#3a4a5a' }}>--</span>}
       </td>
       <td style={styles.dataCell}>
-        <PriceCell value={tick.ask} previousValue={tick.prevAsk} digits={digits} />
+        {tick ? <PriceCell value={tick.ask} previousValue={tick.prevAsk} digits={digits} /> : <span style={{ color: '#3a4a5a' }}>--</span>}
       </td>
       <td style={{ ...styles.dataCell }}>
         <span style={styles.spreadText}>
-          {tick.spread != null ? formatNumber(tick.spread, 1) : '--'}
+          {tick?.spread != null ? formatNumber(tick.spread, 1) : '--'}
         </span>
       </td>
       <td style={styles.dataCell}>
-        {formatNumber(tick.high, digits)}
+        {tick ? formatNumber(tick.high, digits) : '--'}
       </td>
       <td style={styles.dataCell}>
-        {formatNumber(tick.low, digits)}
+        {tick ? formatNumber(tick.low, digits) : '--'}
       </td>
       <td style={styles.dataCell}>
         <span style={styles.volumeText}>
-          {formatVolume(tick.volume)}
+          {tick ? formatVolume(tick.volume) : '--'}
         </span>
       </td>
     </tr>
   )
 }
 
-function CategoryGroup({ category, categorySymbols, ticks }) {
-  const [expanded, setExpanded] = useState(true)
+function CategoryGroup({ category, categorySymbols, ticks, symbolInfo }) {
+  const [expanded, setExpanded] = useState(false)
 
   const symbolCount = categorySymbols.length
 
@@ -276,27 +277,24 @@ function CategoryGroup({ category, categorySymbols, ticks }) {
             <th style={styles.headerCell}>Low</th>
             <th style={styles.headerCell}>Volume</th>
           </tr>
-          {categorySymbols.map((symbol, idx) => {
-            const tick = ticks[symbol]
-            if (!tick) return null
-            return (
-              <SymbolRow
-                key={symbol}
-                symbol={symbol}
-                tick={tick}
-                index={idx}
-              />
-            )
-          })}
+          {categorySymbols.map((symbol, idx) => (
+            <SymbolRow
+              key={symbol}
+              symbol={symbol}
+              tick={ticks[symbol] || null}
+              index={idx}
+              symbolInfo={symbolInfo}
+            />
+          ))}
         </>
       )}
     </>
   )
 }
 
-export default function MarketTable({ ticks, connected }) {
-  const symbolList = useMemo(() => Object.keys(ticks || {}), [ticks])
-  const grouped = useMemo(() => groupByCategory(symbolList), [symbolList])
+export default function MarketTable({ ticks, connected, symbols, symbolInfo }) {
+  const symbolList = useMemo(() => symbols && symbols.length > 0 ? symbols : Object.keys(ticks || {}), [symbols, ticks])
+  const grouped = useMemo(() => groupByCategory(symbolList, symbolInfo), [symbolList, symbolInfo])
   const categoryEntries = useMemo(() => Object.entries(grouped), [grouped])
   const hasData = symbolList.length > 0
 
@@ -324,6 +322,7 @@ export default function MarketTable({ ticks, connected }) {
                 category={category}
                 categorySymbols={categorySymbols}
                 ticks={ticks}
+                symbolInfo={symbolInfo}
               />
             ))}
           </tbody>

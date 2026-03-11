@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["exec", "C:/Users/ABBASS/Desktop/NEW RMS/MT5Connector/bin/Debug/net8.0/MT5Connector.dll"],
+      "port": 8181
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/vite/bin/vite.js"],
+      "port": 5173,
+      "cwd": "market-watch-ui"
+    }
+  ]
+}

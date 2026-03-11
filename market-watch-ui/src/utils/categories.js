@@ -1,45 +1,28 @@
-export const SYMBOL_CATEGORIES = {
-  'Forex Majors': ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD'],
-  'Forex Crosses': ['EURGBP', 'EURJPY', 'GBPJPY', 'EURCHF', 'AUDNZD', 'EURAUD', 'GBPAUD', 'AUDCAD', 'CADJPY', 'CHFJPY'],
-  'Metals': ['XAUUSD', 'XAGUSD'],
-  'Indices': ['US30', 'NAS100', 'SPX500', 'UK100', 'GER40'],
-  'Crypto': ['BTCUSD', 'ETHUSD'],
-}
-
-const CATEGORY_ORDER = [
-  'Forex Majors',
-  'Forex Crosses',
-  'Metals',
-  'Indices',
-  'Crypto',
-]
-
-export function getCategory(symbol) {
-  for (const [category, symbols] of Object.entries(SYMBOL_CATEGORIES)) {
-    if (symbols.includes(symbol)) return category
-  }
-  return 'Other'
-}
-
-export function groupByCategory(symbols) {
+export function groupByCategory(symbols, symbolInfo) {
   const grouped = {}
   for (const symbol of symbols) {
-    const cat = getCategory(symbol)
+    const info = symbolInfo?.[symbol]
+    // Use the MT5 Path as category, fallback to 'Other'
+    let cat = info?.category || 'Other'
+    // MT5 paths can be like "Forex\Majors" - use the top-level folder
+    const slashIdx = cat.indexOf('\\')
+    if (slashIdx > 0) cat = cat.substring(0, slashIdx)
+    if (!cat || cat.trim() === '') cat = 'Other'
+
     if (!grouped[cat]) grouped[cat] = []
     grouped[cat].push(symbol)
   }
-  // Return in defined category order
-  const ordered = {}
-  for (const cat of CATEGORY_ORDER) {
-    if (grouped[cat]) {
-      ordered[cat] = grouped[cat]
-    }
+  // Sort categories alphabetically, but put 'Other' last
+  const sorted = {}
+  const keys = Object.keys(grouped).sort((a, b) => {
+    if (a === 'Other') return 1
+    if (b === 'Other') return -1
+    return a.localeCompare(b)
+  })
+  for (const key of keys) {
+    sorted[key] = grouped[key].sort()
   }
-  // Append any 'Other' category at the end
-  if (grouped['Other']) {
-    ordered['Other'] = grouped['Other']
-  }
-  return ordered
+  return sorted
 }
 
-export default SYMBOL_CATEGORIES
+export default groupByCategory

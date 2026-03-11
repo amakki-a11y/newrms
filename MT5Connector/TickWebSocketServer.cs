@@ -51,6 +51,19 @@ namespace MT5Connector
                     _clients[id] = socket;
                     Console.WriteLine($"[WS] Client connected: {id} ({_clients.Count} total)");
 
+                    // Send full symbol list first
+                    try
+                    {
+                        var symbols = _mt5.GetSymbols();
+                        var symbolsJson = JsonConvert.SerializeObject(
+                            new { type = "symbols", data = symbols.Values.ToList() }, JsonSettings);
+                        socket.Send(symbolsJson);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[WS] Error sending symbols to {id}: {ex.Message}");
+                    }
+
                     // Send snapshot of all current ticks
                     try
                     {

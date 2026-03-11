@@ -132,6 +132,8 @@ function App() {
           <MarketTable
             ticks={marketData.ticks}
             connected={marketData.connected}
+            symbols={marketData.symbols}
+            symbolInfo={marketData.symbolInfo}
           />
         )
 

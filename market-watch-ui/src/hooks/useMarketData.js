@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 export default function useMarketData() {
   const [ticks, setTicks] = useState({})
   const [symbols, setSymbols] = useState([])
+  const [symbolInfo, setSymbolInfo] = useState({})
   const [connected, setConnected] = useState(false)
   const [tickCount, setTickCount] = useState(0)
 
@@ -49,17 +50,40 @@ export default function useMarketData() {
 
           if (msg.type === 'pong') return
 
+          if (msg.type === 'symbols' && Array.isArray(msg.data)) {
+            const infoMap = {}
+            const names = []
+            for (const sym of msg.data) {
+              if (sym.symbol) {
+                names.push(sym.symbol)
+                infoMap[sym.symbol] = sym
+              }
+            }
+            setSymbols(names)
+            setSymbolInfo(infoMap)
+          }
+
           if (msg.type === 'snapshot' && Array.isArray(msg.data)) {
             const initialTicks = {}
-            const initialSymbols = []
             for (const tick of msg.data) {
               if (tick.symbol) {
                 initialTicks[tick.symbol] = { ...tick, prevBid: tick.bid, prevAsk: tick.ask }
-                initialSymbols.push(tick.symbol)
               }
             }
             setTicks(initialTicks)
-            setSymbols(initialSymbols)
+            // Add any snapshot symbols not already in the list
+            setSymbols((prev) => {
+              const existing = new Set(prev)
+              let changed = false
+              const next = [...prev]
+              for (const tick of msg.data) {
+                if (tick.symbol && !existing.has(tick.symbol)) {
+                  next.push(tick.symbol)
+                  changed = true
+                }
+              }
+              return changed ? next : prev
+            })
           }
 
           if (msg.type === 'tick' && msg.data && msg.data.symbol) {
@@ -74,12 +98,6 @@ export default function useMarketData() {
                   prevAsk: prevTick ? prevTick.ask : tick.ask,
                 },
               }
-            })
-            setSymbols((prev) => {
-              if (!prev.includes(tick.symbol)) {
-                return [...prev, tick.symbol]
-              }
-              return prev
             })
             setTickCount((c) => c + 1)
           }
@@ -141,5 +159,5 @@ export default function useMarketData() {
     }
   }, [connectWebSocket])
 
-  return { symbols, ticks, connected, tickCount }
+  return { symbols, symbolInfo, ticks, connected, tickCount }
 }

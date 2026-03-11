@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Threading.Channels;
 
 namespace MT5Connector
@@ -22,6 +23,8 @@ namespace MT5Connector
 
         // MT5 Manager API handle (only used in real mode)
         private object? _manager;
+        private CancellationTokenSource? _tickPumpCts;
+        private Task? _tickPumpTask;
 
         public bool IsConnected => _connected;
         public bool IsMockMode => _isMockMode;
@@ -41,6 +44,7 @@ namespace MT5Connector
                 _isMockMode = false;
                 _connected = true;
                 Console.WriteLine("[MT5] Connected to real MT5 server");
+                StartRealTickPump();
                 return;
             }
 
@@ -64,18 +68,35 @@ namespace MT5Connector
                 Console.WriteLine("[MT5] Mock generator stopped");
             }
 
-            if (!_isMockMode && _manager != null)
+            if (!_isMockMode)
             {
-                try
+                // Stop tick pump
+                if (_tickPumpCts != null)
                 {
-                    // In real mode, would call manager.Disconnect() and manager.Release()
-                    Console.WriteLine("[MT5] Real MT5 connection closed");
+                    _tickPumpCts.Cancel();
+                    try { _tickPumpTask?.Wait(3000); } catch { }
+                    _tickPumpCts.Dispose();
+                    _tickPumpCts = null;
+                    _tickPumpTask = null;
+                    Console.WriteLine("[MT5] Tick pump stopped");
                 }
-                catch (Exception ex)
+
+                if (_manager != null)
                 {
-                    Console.WriteLine($"[MT5] Error during disconnect: {ex.Message}");
+                    try
+                    {
+                        var disconnectMethod = _manager.GetType().GetMethod("Disconnect");
+                        disconnectMethod?.Invoke(_manager, null);
+                        var releaseMethod = _manager.GetType().GetMethod("Release");
+                        releaseMethod?.Invoke(_manager, null);
+                        Console.WriteLine("[MT5] Real MT5 connection closed");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[MT5] Error during disconnect: {ex.Message}");
+                    }
+                    _manager = null;
                 }
-                _manager = null;
             }
 
             _connected = false;
@@ -332,16 +353,53 @@ namespace MT5Connector
 
                 Console.WriteLine("[MT5] MT5 Manager API loaded, connecting...");
 
-                // Attempt initialization and connection via reflection
+                // Attempt initialization - pass the path to the native DLLs
                 var initMethod = factoryType.GetMethod("Initialize");
-                initMethod?.Invoke(null, new object?[] { null });
+                if (initMethod != null)
+                {
+                    var initParams = initMethod.GetParameters();
+                    Console.WriteLine($"[MT5] Initialize params: {string.Join(", ", initParams.Select(p => $"{p.ParameterType.Name} {p.Name}"))}");
 
-                var createMethod = factoryType.GetMethod("CreateManager");
+                    // Try with baseDir path (where native DLLs live)
+                    try
+                    {
+                        if (initParams.Length == 1 && initParams[0].ParameterType == typeof(string))
+                        {
+                            var initResult = initMethod.Invoke(null, new object?[] { baseDir });
+                            Console.WriteLine($"[MT5] Initialize(path) result: {initResult}");
+                        }
+                        else
+                        {
+                            var initResult = initMethod.Invoke(null, new object?[] { null });
+                            Console.WriteLine($"[MT5] Initialize(null) result: {initResult}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[MT5] Initialize error: {ex.InnerException?.Message ?? ex.Message}");
+                    }
+                }
+
+                // Find the right CreateManager overload: CreateManager(uint version, out CIMTManagerAPI manager)
+                var createMethod = factoryType.GetMethods()
+                    .Where(m => m.Name == "CreateManager")
+                    .FirstOrDefault(m =>
+                    {
+                        var p = m.GetParameters();
+                        return p.Length == 2 && p[0].ParameterType == typeof(uint);
+                    });
+                if (createMethod == null)
+                {
+                    // Try the 3-parameter overload: CreateManager(uint, string, out MTRetCode)
+                    createMethod = factoryType.GetMethods()
+                        .FirstOrDefault(m => m.Name == "CreateManager");
+                }
                 if (createMethod == null)
                 {
                     Console.WriteLine("[MT5] CreateManager method not found");
                     return false;
                 }
+                Console.WriteLine($"[MT5] Using CreateManager with {createMethod.GetParameters().Length} params: {string.Join(", ", createMethod.GetParameters().Select(p => p.ParameterType.Name))}");
 
                 // Get version constant (use default 3430 if not found)
                 uint apiVersion = 3430;
@@ -351,37 +409,145 @@ namespace MT5Connector
                     apiVersion = (uint)(versionField.GetValue(null) ?? 3430);
                 }
 
-                // Create manager instance
-                object?[] createParams = new object?[] { apiVersion, null };
-                var createResult = createMethod.Invoke(null, createParams);
+                // Try both overloads - prefer 3-param with data_path, fallback to 2-param
+                var allCreateMethods = factoryType.GetMethods()
+                    .Where(m => m.Name == "CreateManager")
+                    .OrderByDescending(m => m.GetParameters().Length) // try 3-param first
+                    .ToList();
 
-                var manager = createParams[1];
-                if (manager == null)
+                object?[] createParams;
+
+                // Try the 3-param version first: CreateManager(uint version, string data_path, MTRetCode& res) -> CIMTManagerAPI
+                var create3 = allCreateMethods.FirstOrDefault(m => m.GetParameters().Length == 3);
+                var create2 = allCreateMethods.FirstOrDefault(m => m.GetParameters().Length == 2);
+
+                if (create3 != null)
                 {
-                    Console.WriteLine("[MT5] Failed to create MT5 Manager instance");
+                    createMethod = create3;
+                    createParams = new object?[] { apiVersion, baseDir, null };
+                    Console.WriteLine($"[MT5] Trying 3-param CreateManager with data_path={baseDir}");
+                }
+                else if (create2 != null)
+                {
+                    createMethod = create2;
+                    createParams = new object?[] { apiVersion, null };
+                }
+                else
+                {
+                    Console.WriteLine("[MT5] No suitable CreateManager overload found");
                     return false;
                 }
 
-                // Connect
-                var managerType = manager.GetType();
-                var connectMethod = managerType.GetMethod("Connect");
-                if (connectMethod == null)
+                var createResult = createMethod.Invoke(null, createParams);
+                Console.WriteLine($"[MT5] CreateManager return value: {createResult} (type: {createResult?.GetType().Name ?? "null"})");
+                for (int i = 0; i < createParams.Length; i++)
+                    Console.WriteLine($"[MT5]   param[{i}] = {createParams[i]} (type: {createParams[i]?.GetType().Name ?? "null"})");
+
+                // The manager could be the return value or an out param
+                object? manager = null;
+                // Check return value first
+                if (createResult != null && createResult.GetType().Name.Contains("Manager"))
                 {
-                    Console.WriteLine("[MT5] Connect method not found on manager");
+                    manager = createResult;
+                }
+                // Check out params
+                for (int i = 0; i < createParams.Length; i++)
+                {
+                    if (createParams[i] != null && createParams[i]!.GetType().Name.Contains("Manager"))
+                    {
+                        manager = createParams[i];
+                        break;
+                    }
+                }
+                // If still no manager, check if return value has Connect method
+                if (manager == null && createResult != null && createResult.GetType().GetMethod("Connect") != null)
+                {
+                    manager = createResult;
+                }
+
+                if (manager == null)
+                {
+                    Console.WriteLine("[MT5] Failed to create MT5 Manager instance - no manager object found");
+                    Console.WriteLine($"[MT5] Listing all CreateManager overloads:");
+                    foreach (var m in factoryType.GetMethods().Where(x => x.Name == "CreateManager"))
+                    {
+                        var pars = string.Join(", ", m.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
+                        Console.WriteLine($"[MT5]   {m.ReturnType.Name} CreateManager({pars})");
+                    }
                     return false;
+                }
+                Console.WriteLine($"[MT5] Manager object type: {manager.GetType().FullName}");
+
+                // Connect - discover the right overload
+                var managerType = manager.GetType();
+                var connectMethods = managerType.GetMethods().Where(m => m.Name == "Connect").ToList();
+                Console.WriteLine($"[MT5] Found {connectMethods.Count} Connect overloads:");
+                foreach (var cm in connectMethods)
+                {
+                    var pars = string.Join(", ", cm.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
+                    Console.WriteLine($"[MT5]   {cm.ReturnType.Name} Connect({pars})");
                 }
 
                 string serverAddr = $"{_config.ServerAddress}:{_config.ServerPort}";
-                var connectResult = connectMethod.Invoke(manager, new object[]
-                {
-                    serverAddr,
-                    _config.ManagerLogin,
-                    _config.ManagerPassword,
-                    null!,
-                    0x3F // PUMP_MODE_FULL
-                });
+                object? connectResult = null;
 
-                Console.WriteLine($"[MT5] Connect result: {connectResult}");
+                // Build Connect args dynamically based on discovered signature
+                foreach (var cm in connectMethods)
+                {
+                    var pars = cm.GetParameters();
+                    if (pars.Length < 4) continue;
+
+                    try
+                    {
+                        var connectArgs = new List<object>();
+                        foreach (var p in pars)
+                        {
+                            var pName = p.Name?.ToLower() ?? "";
+                            var pType = p.ParameterType;
+
+                            if (pName.Contains("server"))
+                                connectArgs.Add(serverAddr);
+                            else if (pName.Contains("login"))
+                                connectArgs.Add((ulong)_config.ManagerLogin);
+                            else if (pName.Contains("password") && !pName.Contains("cert"))
+                                connectArgs.Add(_config.ManagerPassword);
+                            else if (pName.Contains("cert") || pName.Contains("password_cert"))
+                                connectArgs.Add("");
+                            else if (pName.Contains("pump") || pName.Contains("mode"))
+                            {
+                                if (pType.IsEnum)
+                                    connectArgs.Add(Enum.ToObject(pType, 0x3FF));
+                                else
+                                    connectArgs.Add((uint)0x3FF);
+                            }
+                            else if (pName.Contains("timeout"))
+                                connectArgs.Add((uint)30000);
+                            else if (pType == typeof(string))
+                                connectArgs.Add("");
+                            else if (pType == typeof(uint))
+                                connectArgs.Add((uint)0);
+                            else if (pType == typeof(ulong))
+                                connectArgs.Add((ulong)0);
+                            else
+                                connectArgs.Add(pType.IsValueType ? Activator.CreateInstance(pType)! : null!);
+                        }
+
+                        Console.WriteLine($"[MT5] Trying Connect with {pars.Length} params: {string.Join(", ", connectArgs.Select((a, i) => $"{pars[i].Name}={a}"))}");
+                        connectResult = cm.Invoke(manager, connectArgs.ToArray());
+                        Console.WriteLine($"[MT5] Connect result: {connectResult}");
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[MT5] Connect overload failed: {ex.InnerException?.Message ?? ex.Message}");
+                    }
+                }
+
+                if (connectResult == null || connectResult.ToString()!.Contains("ERROR") || connectResult.ToString()!.Contains("FAIL"))
+                {
+                    Console.WriteLine($"[MT5] Connection to {serverAddr} failed: {connectResult}");
+                    return false;
+                }
 
                 _manager = manager;
 
@@ -416,36 +582,119 @@ namespace MT5Connector
                     var total = (uint)(totalMethod.Invoke(manager, null) ?? 0);
                     Console.WriteLine($"[MT5] Found {total} symbols on server");
 
-                    var nextMethod = managerType.GetMethod("SymbolNext");
-                    for (uint i = 0; i < total && nextMethod != null; i++)
+                    // SymbolNext may need a CIMTConSymbol object created first
+                    // First, find SymbolCreate to make the symbol object
+                    var symbolCreateMethod = managerType.GetMethod("SymbolCreate");
+                    object? symbolTemplate = null;
+                    if (symbolCreateMethod != null)
                     {
-                        try
+                        var scParams = symbolCreateMethod.GetParameters();
+                        if (scParams.Length == 1) // out param
                         {
-                            var symbolParams = new object[] { i, null! };
-                            nextMethod.Invoke(manager, symbolParams);
-                            var symbolObj = symbolParams[1];
-                            if (symbolObj != null)
+                            var scArgs = new object?[] { null };
+                            symbolCreateMethod.Invoke(manager, scArgs);
+                            symbolTemplate = scArgs[0];
+                        }
+                        else if (scParams.Length == 0)
+                        {
+                            symbolTemplate = symbolCreateMethod.Invoke(manager, null);
+                        }
+                        Console.WriteLine($"[MT5] SymbolCreate: {symbolTemplate?.GetType().Name ?? "null"}");
+                    }
+
+                    var nextMethod = managerType.GetMethod("SymbolNext");
+                    if (nextMethod != null)
+                    {
+                        var nextParams = nextMethod.GetParameters();
+                        Console.WriteLine($"[MT5] SymbolNext params: {string.Join(", ", nextParams.Select(p => $"{p.ParameterType.Name} {p.Name}"))}");
+
+                        // Log first symbol object's methods for debugging
+                        bool loggedMethods = false;
+
+                        for (uint i = 0; i < total; i++)
+                        {
+                            try
                             {
+                                object? symbolObj = null;
+                                object? retCode = null;
+
+                                if (nextParams.Length == 2 && nextParams[0].ParameterType == typeof(uint))
+                                {
+                                    // SymbolNext(uint pos, CIMTConSymbol symbol) - pass the template
+                                    if (symbolTemplate == null) break;
+                                    var args = new object[] { i, symbolTemplate };
+                                    retCode = nextMethod.Invoke(manager, args);
+                                    symbolObj = args[1]; // might be updated in place
+                                }
+                                else if (nextParams.Length == 1)
+                                {
+                                    var args = new object?[] { null };
+                                    retCode = nextMethod.Invoke(manager, args);
+                                    symbolObj = args[0];
+                                }
+
+                                if (symbolObj == null) continue;
+
                                 var symType = symbolObj.GetType();
-                                string name = symType.GetMethod("Symbol")?.Invoke(symbolObj, null)?.ToString() ?? "";
+
+                                if (!loggedMethods)
+                                {
+                                    // Log available methods/properties for debugging
+                                    var methods = symType.GetMethods()
+                                        .Where(m => m.GetParameters().Length == 0 && m.ReturnType != typeof(void))
+                                        .Select(m => $"{m.ReturnType.Name} {m.Name}()")
+                                        .Take(30);
+                                    Console.WriteLine($"[MT5] Symbol object methods: {string.Join(", ", methods)}");
+
+                                    var props = symType.GetProperties()
+                                        .Select(p => $"{p.PropertyType.Name} {p.Name}")
+                                        .Take(20);
+                                    Console.WriteLine($"[MT5] Symbol object properties: {string.Join(", ", props)}");
+                                    loggedMethods = true;
+                                }
+
+                                // Try multiple ways to get the symbol name
+                                // Use GetMethods to find the parameterless getter to avoid ambiguity
+                                string name = "";
+                                var symbolGetter = symType.GetMethods().FirstOrDefault(m => m.Name == "Symbol" && m.GetParameters().Length == 0 && m.ReturnType == typeof(string));
+                                if (symbolGetter != null)
+                                    name = symbolGetter.Invoke(symbolObj, null)?.ToString() ?? "";
+                                if (string.IsNullOrEmpty(name))
+                                {
+                                    var nameGetter = symType.GetMethods().FirstOrDefault(m => m.Name == "Name" && m.GetParameters().Length == 0 && m.ReturnType == typeof(string));
+                                    name = nameGetter?.Invoke(symbolObj, null)?.ToString() ?? "";
+                                }
+
+                                if (i < 3)
+                                    Console.WriteLine($"[MT5] Symbol[{i}]: name='{name}', retCode={retCode}");
+
                                 if (!string.IsNullOrEmpty(name))
                                 {
+                                    int digits = 5;
+                                    try { digits = Convert.ToInt32(GetReflectionValue(symType, symbolObj, "Digits") ?? 5); } catch { }
+
+                                    double contractSize = 100000.0;
+                                    try { contractSize = Convert.ToDouble(GetReflectionValue(symType, symbolObj, "ContractSize") ?? 100000.0); } catch { }
+
+                                    string category = GetReflectionValue(symType, symbolObj, "Path")?.ToString() ?? "";
+                                    string profitCurrency = GetReflectionValue(symType, symbolObj, "CurrencyProfit")?.ToString() ?? "USD";
+                                    string marginCurrency = GetReflectionValue(symType, symbolObj, "CurrencyMargin")?.ToString() ?? "USD";
+
                                     _symbols[name] = new SymbolInfo
                                     {
                                         Symbol = name,
-                                        Digits = (int)(symType.GetMethod("Digits")?.Invoke(symbolObj, null) ?? 5),
-                                        ContractSize = (double)(symType.GetMethod("ContractSize")?.Invoke(symbolObj, null) ?? 100000.0),
-                                        ProfitCurrency = symType.GetMethod("CurrencyProfit")?.Invoke(symbolObj, null)?.ToString() ?? "USD",
-                                        MarginCurrency = symType.GetMethod("CurrencyMargin")?.Invoke(symbolObj, null)?.ToString() ?? "USD",
-                                        CalcMode = (int)(symType.GetMethod("CalcMode")?.Invoke(symbolObj, null) ?? 0),
-                                        Category = symType.GetMethod("Path")?.Invoke(symbolObj, null)?.ToString() ?? ""
+                                        Digits = digits,
+                                        ContractSize = contractSize,
+                                        ProfitCurrency = profitCurrency,
+                                        MarginCurrency = marginCurrency,
+                                        Category = category
                                     };
                                 }
                             }
-                        }
-                        catch
-                        {
-                            // Skip symbols that fail to load
+                            catch (Exception ex)
+                            {
+                                if (i < 3) Console.WriteLine($"[MT5] Symbol[{i}] error: {ex.InnerException?.Message ?? ex.Message}");
+                            }
                         }
                     }
                 }
@@ -456,6 +705,210 @@ namespace MT5Connector
             {
                 Console.WriteLine($"[MT5] Error loading symbols: {ex.Message}");
             }
+        }
+
+        // Helper: safely get a parameterless method/property value via reflection (avoids ambiguity)
+        private static object? GetReflectionValue(Type type, object obj, string name)
+        {
+            try
+            {
+                // Try parameterless method first
+                var method = type.GetMethods().FirstOrDefault(m => m.Name == name && m.GetParameters().Length == 0);
+                if (method != null) return method.Invoke(obj, null);
+
+                // Try property
+                var prop = type.GetProperty(name);
+                if (prop != null) return prop.GetValue(obj);
+            }
+            catch { }
+            return null;
+        }
+
+        private void StartRealTickPump()
+        {
+            if (_manager == null) return;
+
+            _tickPumpCts = new CancellationTokenSource();
+            var ct = _tickPumpCts.Token;
+            var manager = _manager;
+            var managerType = manager.GetType();
+
+            // Try to find batch TickLast(UInt32& id, MTRetCode& res) -> MTTick[]
+            var batchTickMethod = managerType.GetMethods()
+                .FirstOrDefault(m => m.Name == "TickLast" &&
+                    m.GetParameters().Length == 2 &&
+                    m.GetParameters()[0].ParameterType == typeof(uint).MakeByRefType());
+
+            // Find per-symbol TickLast(String symbol, MTTickShort& tick)
+            var perSymbolTickMethod = managerType.GetMethods()
+                .FirstOrDefault(m => m.Name == "TickLast" &&
+                    m.GetParameters().Length == 2 &&
+                    m.GetParameters()[0].ParameterType == typeof(string));
+
+            Console.WriteLine($"[MT5] Tick pump: batch method={batchTickMethod != null}, per-symbol method={perSymbolTickMethod != null}");
+
+            _tickPumpTask = Task.Run(async () =>
+            {
+                uint lastTickId = 0;
+                int pollIntervalMs = _config.TickThrottleMs > 0 ? _config.TickThrottleMs : 200;
+                int symbolPollIntervalMs = 5000; // Poll individual symbols every 5s
+                DateTime lastSymbolPoll = DateTime.MinValue;
+
+                Console.WriteLine($"[MT5] Tick pump started (interval={pollIntervalMs}ms)");
+
+                while (!ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        int ticksProcessed = 0;
+
+                        // Strategy 1: Batch tick polling
+                        if (batchTickMethod != null)
+                        {
+                            try
+                            {
+                                object?[] batchParams = new object?[] { lastTickId, null };
+                                var result = batchTickMethod.Invoke(manager, batchParams);
+
+                                if (result is Array tickArray && tickArray.Length > 0)
+                                {
+                                    lastTickId = (uint)(batchParams[0] ?? lastTickId);
+
+                                    foreach (var mtTick in tickArray)
+                                    {
+                                        var tickType = mtTick.GetType();
+                                        string symbol = GetReflectionValue(tickType, mtTick, "Symbol")?.ToString() ?? "";
+                                        if (string.IsNullOrEmpty(symbol)) continue;
+
+                                        double bid = Convert.ToDouble(GetReflectionValue(tickType, mtTick, "Bid") ?? 0);
+                                        double ask = Convert.ToDouble(GetReflectionValue(tickType, mtTick, "Ask") ?? 0);
+                                        double last = Convert.ToDouble(GetReflectionValue(tickType, mtTick, "Last") ?? 0);
+                                        ulong volume = Convert.ToUInt64(GetReflectionValue(tickType, mtTick, "Volume") ?? 0UL);
+
+                                        if (bid <= 0 && ask <= 0 && last <= 0) continue;
+
+                                        var info = GetSymbolInfo(symbol);
+                                        int digits = info?.Digits ?? 5;
+
+                                        var tickData = new TickData
+                                        {
+                                            Symbol = symbol,
+                                            Bid = bid,
+                                            Ask = ask,
+                                            Volume = (double)volume,
+                                            Digits = digits,
+                                            TickTime = DateTime.UtcNow
+                                        };
+
+                                        // Compute spread
+                                        if (bid > 0 && ask > 0)
+                                        {
+                                            double pipMultiplier = Math.Pow(10, digits);
+                                            tickData.Spread = Math.Round((ask - bid) * pipMultiplier, 1);
+                                        }
+
+                                        // Compute direction
+                                        TickData? prev;
+                                        lock (_tickLock) { _latestTicks.TryGetValue(symbol, out prev); }
+                                        if (prev != null)
+                                            tickData.Direction = bid > prev.Bid ? "up" : bid < prev.Bid ? "down" : "none";
+
+                                        RaiseTickReceived(tickData);
+                                        ticksProcessed++;
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[MT5] Batch tick error: {ex.InnerException?.Message ?? ex.Message}");
+                            }
+                        }
+
+                        // Strategy 2: Per-symbol polling (fallback/supplement, less frequent)
+                        if (perSymbolTickMethod != null && (DateTime.UtcNow - lastSymbolPoll).TotalMilliseconds >= symbolPollIntervalMs)
+                        {
+                            lastSymbolPoll = DateTime.UtcNow;
+                            var symbolNames = _symbols.Keys.ToList();
+                            int perSymbolTicks = 0;
+
+                            foreach (var symbol in symbolNames)
+                            {
+                                if (ct.IsCancellationRequested) break;
+
+                                try
+                                {
+                                    object?[] symParams = new object?[] { symbol, null };
+                                    var retCode = perSymbolTickMethod.Invoke(manager, symParams);
+                                    var tickShort = symParams[1];
+
+                                    if (tickShort == null) continue;
+
+                                    var tType = tickShort.GetType();
+                                    double bid = Convert.ToDouble(GetReflectionValue(tType, tickShort, "Bid") ?? 0);
+                                    double ask = Convert.ToDouble(GetReflectionValue(tType, tickShort, "Ask") ?? 0);
+
+                                    if (bid <= 0 && ask <= 0) continue;
+
+                                    // Only update if we don't already have this price
+                                    TickData? existing;
+                                    lock (_tickLock)
+                                    {
+                                        _latestTicks.TryGetValue(symbol, out existing);
+                                    }
+
+                                    if (existing != null && Math.Abs(existing.Bid - bid) < 1e-10 && Math.Abs(existing.Ask - ask) < 1e-10)
+                                        continue;
+
+                                    var info = GetSymbolInfo(symbol);
+                                    int digits = info?.Digits ?? 5;
+
+                                    var tickData = new TickData
+                                    {
+                                        Symbol = symbol,
+                                        Bid = bid,
+                                        Ask = ask,
+                                        Digits = digits,
+                                        TickTime = DateTime.UtcNow
+                                    };
+
+                                    if (bid > 0 && ask > 0)
+                                    {
+                                        double pipMultiplier = Math.Pow(10, digits);
+                                        tickData.Spread = Math.Round((ask - bid) * pipMultiplier, 1);
+                                    }
+
+                                    // Compute direction
+                                    if (existing != null)
+                                        tickData.Direction = bid > existing.Bid ? "up" : bid < existing.Bid ? "down" : "none";
+
+                                    RaiseTickReceived(tickData);
+                                    perSymbolTicks++;
+                                }
+                                catch
+                                {
+                                    // Skip symbols that fail
+                                }
+                            }
+
+                            if (perSymbolTicks > 0)
+                                Console.WriteLine($"[MT5] Per-symbol poll: {perSymbolTicks} symbols with prices");
+                        }
+
+                        await Task.Delay(pollIntervalMs, ct);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[MT5] Tick pump error: {ex.Message}");
+                        await Task.Delay(1000, ct);
+                    }
+                }
+
+                Console.WriteLine("[MT5] Tick pump stopped");
+            }, ct);
         }
 
         private void StartMockMode()
